@@ -1,37 +1,105 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
-const vscode = require('vscode');
-
-// this method is called when your extension is activated
-// your extension is activated the very first time the command is executed
+const vscode = require("vscode");
+const axios = require("axios");
+const barItems = {};
+let interval;
 
 /**
  * @param {vscode.ExtensionContext} context
  */
-function activate(context) {
+function activate() {
+  const updateInterval =
+    vscode.workspace.getConfiguration("vstock-watcher")
+      .updateInterval || 30000;
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "vstock-watcher" is now active!');
-
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with  registerCommand
-	// The commandId parameter must match the command field in package.json
-	let disposable = vscode.commands.registerCommand('vstock-watcher.helloWorld', function () {
-		// The code you place here will be executed every time your command is executed
-
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from vstock-watcher!');
-	});
-
-	context.subscriptions.push(disposable);
+  init();
+  interval = setInterval(async () => {
+    init();
+  }, updateInterval);
 }
 exports.activate = activate;
 
-// this method is called when your extension is deactivated
-function deactivate() {}
+function deactivate() {
+  clearInterval(interval);
+}
+
+async function init() {
+  const stocks = await fetchData();
+  updateStatusBarItem(stocks);
+}
+
+async function fetchData() {
+  const baseUrl = "http://mis.twse.com.tw/stock/api/getStockInfo.jsp";
+  const codes =
+    vscode.workspace.getConfiguration("vstock-watcher").stocks || [];
+
+  const queryStr = codes.join("|");
+
+  try {
+    const res = await axios.get(
+      `${baseUrl}?ex_ch=${queryStr}&json=1&delay=0`
+    );
+
+    const stocks = res.data.msgArray.map((el) => ({
+      name: el.n,
+      price: +el.pz,
+      code: el.c,
+      yesterday: +el.y,
+    }));
+
+    return stocks;
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
+}
+
+function getText(stock) {
+  return `${stock.name} ${stock.price}`;
+}
+
+function getColor(stock) {
+  const {
+    riseColor = "#ed7e7e",
+    fallColor = "#78e378",
+  } = vscode.workspace.getConfiguration("vstock-watcher");
+
+  return stock.price > stock.yesterday ? riseColor : fallColor;
+}
+
+function getTooltip(stock) {
+  const diff = stock.price - stock.yesterday;
+  const prefix = diff > 0 ? "+" : "-";
+  return `${prefix}${diff.toFixed(2)}`;
+}
+
+function createStatusBarItem(stock) {
+  const item = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    Number.MAX_VALUE
+  );
+  item.text = getText(stock);
+  item.color = getColor(stock);
+  item.tooltip = getTooltip(stock);
+  item.show();
+
+  return item;
+}
+
+function updateStatusBarItem(stocks = []) {
+  stocks.forEach((stock) => {
+    const { code } = stock;
+
+    if (barItems[code]) {
+      barItems[code].text = getText(stock);
+      barItems[code].color = getColor(stock);
+      barItems[code].tooltip = getTooltip(stock);
+    } else {
+      barItems[code] = createStatusBarItem(stock);
+    }
+  });
+}
 
 module.exports = {
-	activate,
-	deactivate
-}
+  activate,
+  deactivate,
+};
